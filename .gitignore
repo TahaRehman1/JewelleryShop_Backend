@@ -1,0 +1,128 @@
+# =========================
+# Build results
+# =========================
+bin/
+obj/
+out/
+publish/
+
+# =========================
+# User-specific files
+# =========================
+*.user
+*.userosscache
+*.suo
+*.userprefs
+
+# =========================
+# Visual Studio
+# =========================
+.vs/
+*.vcxproj.user
+*.dbmdl
+*.opendb
+*.VC.db
+
+# =========================
+# Rider
+# =========================
+.idea/
+
+# =========================
+# VS Code
+# =========================
+.vscode/
+
+# =========================
+# Logs
+# =========================
+*.log
+logs/
+
+# =========================
+# OS generated files
+# =========================
+.DS_Store
+Thumbs.db
+
+# =========================
+# Environment variables
+# =========================
+.env
+.env.*
+
+# =========================
+# ASP.NET Core specific
+# =========================
+appsettings.Development.json
+appsettings.Local.json
+
+# =========================
+# Secrets
+# =========================
+secrets.json
+
+# =========================
+# Node (if frontend inside project)
+# =========================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# =========================
+# wwwroot (optional - if generated assets)
+# =========================
+wwwroot/dist/
+wwwroot/build/
+
+# =========================
+# Entity Framework
+# =========================
+Migrations/*.Designer.cs
+
+# =========================
+# Publish profiles
+# =========================
+Properties/PublishProfiles/
+
+# =========================
+# Azure
+# =========================
+*.PublishSettings
+
+# =========================
+# Temporary files
+# =========================
+*.tmp
+*.temp
+
+# =========================
+# Coverage reports
+# =========================
+coverage/
+*.coverage
+*.coveragexml
+
+# =========================
+# Test results
+# =========================
+TestResults/
+
+# =========================
+# NuGet
+# =========================
+*.nupkg
+.nuget/
+packages/
+
+# =========================
+# Dotnet tools
+# =========================
+.dotnet/
+
+# =========================
+# Resharper
+# =========================
+_ReSharper*/
+*.DotSettings.user
