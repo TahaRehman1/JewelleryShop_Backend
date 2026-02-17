@@ -30,35 +30,44 @@ public class ProductsController : ControllerBase
 		_imageService = imageService;
 	}
 
-	[HttpGet("GetAll")]
-	[Authorize(Roles = "Admin")]
-	public async Task<ActionResult<List<ProductViewModel>>> GetProducts(int skip, int take)
-	{
-		List<ProductViewModel> list = new List<ProductViewModel>();
-		foreach (ProductModel product in await _context.Products.Skip(skip).Take(take).ToListAsync())
-		{
-			List<ProductImageViewModel> images = await _productService.GetProductImages(product.Id);
-			CategoryModel category = await _context.Categories.FindAsync(product.CategoryId);
-			List<ProductSpecificationViewModel> specifications = await GetAllProductSpecifications(product.Id);
-			list.Add(new ProductViewModel
-			{
-				Id = product.Id,
-				Name = product.Name,
-				Description = product.Description,
-				DetailedDescription = product.DetailedDescription,
-				Price = product.Price,
-				CategoryId = product.CategoryId,
-				Images = images,
-				Category = category,
-				Code = product.Code,
-				IsActive = product.IsActive,
-				Specifications = specifications
-			});
-		}
-		return Ok(list);
-	}
+    [HttpGet("GetAll")]
+    [Authorize(Roles = "Admin")]
+    public async Task<ActionResult<List<ProductViewModel>>> GetProducts(int skip, int take)
+    {
+        var products = await _context.Products
+            .Include(p => p.Category)
+                .ThenInclude(c => c.Parent)
+            .Skip(skip)
+            .Take(take)
+            .ToListAsync();
 
-	[HttpPut("UpdateIsActive")]
+        List<ProductViewModel> list = new();
+
+        foreach (var product in products)
+        {
+            var images = await _productService.GetProductImages(product.Id);
+            var specifications = await GetAllProductSpecifications(product.Id);
+
+            list.Add(new ProductViewModel
+            {
+                Id = product.Id,
+                Name = product.Name,
+                Description = product.Description,
+                DetailedDescription = product.DetailedDescription,
+                Price = product.Price,
+                CategoryId = product.CategoryId,
+                Images = images,
+                Category = product.Category, // 👈 already has Parent
+                Code = product.Code,
+                IsActive = product.IsActive,
+                Specifications = specifications
+            });
+        }
+
+        return Ok(list);
+    }
+
+    [HttpPut("UpdateIsActive")]
 	[Authorize(Roles = "Admin")]
 	public async Task<ActionResult> UpdateIsActive(Guid id, bool isActive)
 	{
@@ -290,14 +299,21 @@ public class ProductsController : ControllerBase
 		return await GetProductModel(await _context.Products.FindAsync(id));
 	}
 
-	[HttpGet("GetByCode")]
-	public async Task<ActionResult<ProductViewModel>> GetProduct(string code)
-	{
-		ProductModel product = _context.Products.FirstOrDefault((ProductModel x) => x.Code == code);
-		return await GetProductModel(product);
-	}
+    [HttpGet("GetByCode")]
+    public async Task<ActionResult<ProductViewModel>> GetProduct(string code)
+    {
+        var product = await _context.Products
+            .Include(p => p.Category)
+                .ThenInclude(c => c.Parent)
+            .FirstOrDefaultAsync(x => x.Code == code);
 
-	private async Task<ProductViewModel> GetProductModel(ProductModel product)
+        if (product == null)
+            return NotFound();
+
+        return await GetProductModel(product);
+    }
+
+    private async Task<ProductViewModel> GetProductModel(ProductModel product)
 	{
 		List<ProductImageViewModel> images = await _productService.GetProductImages(product.Id);
 		CategoryModel category = await _context.Categories.FindAsync(product.CategoryId);

@@ -23,26 +23,85 @@ public class CategoriesController : ControllerBase
 	[Authorize(Roles = "Admin")]
 	public async Task<ActionResult<List<CategoryModel>>> GetAllMain()
 	{
-		return await _context.Categories.Where((CategoryModel x) => x.ParentId == null).ToListAsync();
-	}
+        return await _context.Categories
+               .Include(x => x.Parent) // 👈 include parent data
+               .Where(x => x.IsMenuOnly == false)
+               .ToListAsync();
+    }
 
-	[HttpGet("GetAllNavCategories")]
-	public async Task<ActionResult<List<CategoryModel>>> GetAllNavCategories()
-	{
-		List<Guid> categoryids = await (from x in _context.Products
-			where x.IsActive
-			select x.CategoryId).Distinct().ToListAsync();
-		return await _context.Categories.Where((CategoryModel p) => categoryids.Contains(p.Id)).ToListAsync();
-	}
+    [HttpGet("GetAllNavCategories")]
+    public async Task<ActionResult<List<NavCategoryDto>>> GetAllNavCategories()
+    {
+        // Step 1: Get category IDs used by active products
+        //var categoryIds = await _context.Products
+        //    .Where(x => x.IsActive)
+        //    .Select(x => x.CategoryId)
+        //    .Distinct()
+        //    .ToListAsync();
 
-	[HttpGet("GetSubCategories")]
+        // Step 2: Get those categories
+        var categories = await _context.Categories
+            //.Where(x => categoryIds.Contains(x.Id))
+            .ToListAsync();
+
+        // Step 3: Get missing parents
+        var parentIds = categories
+            .Where(x => x.ParentId != null)
+            .Select(x => x.ParentId.Value)
+            .Distinct()
+            .ToList();
+
+        var parents = await _context.Categories
+            .Where(x => parentIds.Contains(x.Id))
+            .ToListAsync();
+
+        // Step 4: Merge both
+        var allCategories = categories
+            .Concat(parents)
+            .DistinctBy(x => x.Id)
+            .ToList();
+
+        var result = new List<NavCategoryDto>();
+
+        // Step 5: Build structure
+        var parentCategories = allCategories
+            .Where(x => x.ParentId == null)
+            .ToList();
+
+        foreach (var parent in parentCategories)
+        {
+            var children = allCategories
+                .Where(x => x.ParentId == parent.Id)
+                .ToList();
+
+            result.Add(new NavCategoryDto
+            {
+                Id = parent.Id,
+                Name = parent.Name,
+                Children = children.Select(c => new NavCategoryDto
+                {
+                    Id = c.Id,
+                    Name = c.Name
+                }).ToList()
+            });
+        }
+
+        return result;
+    }
+
+    [HttpGet("GetSubCategories")]
 	[Authorize(Roles = "Admin")]
 	public async Task<ActionResult<List<CategoryModel>>> GetSubCategories(Guid id)
 	{
 		return await _context.Categories.Where((CategoryModel x) => x.ParentId == id).ToListAsync();
 	}
-
-	[HttpGet("GetAll")]
+    [HttpGet("GetAllMenuParent")]
+    [Authorize(Roles = "Admin")]
+    public async Task<ActionResult<List<CategoryModel>>> GetAllMenuParent()
+    {
+        return await _context.Categories.Where((CategoryModel x) => x.IsMenuOnly).ToListAsync();
+    }
+    [HttpGet("GetAll")]
 	[Authorize(Roles = "Admin")]
 	public async Task<ActionResult<List<CategoryViewModel>>> GetAll(int skip, int take)
 	{
@@ -51,7 +110,8 @@ public class CategoriesController : ControllerBase
 			{
 				Id = c.Id,
 				Name = c.Name,
-				ParentCategory = ((c.ParentId != null) ? _context.Categories.FirstOrDefault((CategoryModel pc) => pc.Id == c.ParentId) : new CategoryModel())
+				ParentCategory = ((c.ParentId != null) ? _context.Categories.FirstOrDefault((CategoryModel pc) => pc.Id == c.ParentId) : new CategoryModel()),
+				IsMenuOnly = c.IsMenuOnly,
 			}).ToListAsync();
 	}
 
@@ -116,7 +176,9 @@ public class CategoriesController : ControllerBase
 		CategoryModel category = new CategoryModel
 		{
 			Id = Guid.NewGuid(),
-			Name = model.Name
+			Name = model.Name,
+			ParentId = model.ParentId,
+			IsMenuOnly = model.IsMenuOnly
 		};
 		_context.Categories.Add(category);
 		await _context.SaveChangesAsync();

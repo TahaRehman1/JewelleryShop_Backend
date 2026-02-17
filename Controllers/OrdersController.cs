@@ -1,8 +1,3 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 using JeweleryAppBackend.Enumerations;
 using JeweleryAppBackend.Models;
 using JeweleryAppBackend.Services;
@@ -10,6 +5,12 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using Stripe.Climate;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
 
 namespace JeweleryAppBackend.Controllers;
 
@@ -18,18 +19,20 @@ namespace JeweleryAppBackend.Controllers;
 public class OrdersController : ControllerBase
 {
 	private readonly ApplicationDbContext _context;
-
-	private readonly ShippingFeeSettings _shippingFeeSettings;
+    private readonly Services.EmailService _emailService;
+    private readonly EmailSettings _emailSettings;
+    private readonly ShippingFeeSettings _shippingFeeSettings;
     private readonly InvoiceService _invoiceService;
-    private readonly OrderService _orderService;
+    private readonly Services.OrderService _orderService;
 
-    public OrdersController(OrderService orderService,InvoiceService invoiceService,ApplicationDbContext context, IOptions<ShippingFeeSettings> shippingFeeSettings)
+    public OrdersController(Services.EmailService emailService,Services.OrderService orderService,InvoiceService invoiceService,ApplicationDbContext context, IOptions<EmailSettings> emailSettings, IOptions<ShippingFeeSettings> shippingFeeSettings)
 	{
 		_context = context;
 		_shippingFeeSettings = shippingFeeSettings.Value;
 		_invoiceService = invoiceService;
 		_orderService = orderService;
-
+		_emailService = emailService;
+		_emailSettings = emailSettings.Value;
     }
 
 	[HttpGet("GetAll")]
@@ -237,11 +240,152 @@ public class OrdersController : ControllerBase
         await _invoiceService.CreateInvoice(id);
         return NoContent();
     }
-
+    
     private bool OrderExists(Guid id)
 	{
 		return _context.Orders.Any((OrderModel e) => e.Id == id);
 	}
+    [HttpPut("UpdateStatus")]
+    [Authorize]
+    public async Task<IActionResult> UpdateStatus([FromBody] UpdateOrderStatusRequest request)
+    {
+        try
+        {
+            if (request == null || request.OrderId == Guid.Empty)
+                return BadRequest("Invalid request");
 
-    
+            if (!Enum.IsDefined(typeof(OrderStatus), request.OrderStatus))
+                return BadRequest("Invalid status");
+
+            var order = await _context.Orders.FindAsync(request.OrderId);
+
+            if (order == null)
+                return NotFound("Order not found");
+
+            // 🚫 Prevent duplicate update
+            if (order.OrderStatus == request.OrderStatus)
+            {
+                return Ok(new { message = "No changes detected" });
+            }
+
+            // ✅ Update
+            order.OrderStatus = (OrderStatus)request.OrderStatus;
+
+            await _context.SaveChangesAsync();
+
+            // 📧 Send Email (separate method)
+            await SendOrderStatusEmail(order);
+
+            return Ok(new
+            {
+                message = "Order status updated successfully"
+            });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new
+            {
+                message = "Something went wrong",
+                error = ex.Message
+            });
+        }
+    }
+    private async Task SendOrderStatusEmail(OrderModel order)
+    {
+        try
+        {
+            var customerEmail = order.CustomerEmail;
+            var customerName = order.CustomerName ?? "Customer";
+            var orderId = order.OrderNumber.ToString();
+
+            string subject = "";
+            string body = "";
+            byte[]? pdfBytes = null;
+
+            switch (order.OrderStatus)
+            {
+                case OrderStatus.Confirmed:
+                    subject = $"Order Confirmed - #{orderId}";
+                    body = $@"
+                <div style='font-family:Arial; line-height:1.6'>
+                    <h2 style='color:#b2760b;'>Order Confirmed</h2>
+                    <p>Dear {customerName},</p>
+                    <p>Your order <strong>#{orderId}</strong> has been confirmed.</p>
+                    <p>We are now preparing your order.</p>
+                    <br/>
+                    <p>Thank you for shopping with us!</p>
+                </div>";
+
+                    // Optional
+                    // pdfBytes = GenerateInvoice(order);
+
+                    break;
+
+                case OrderStatus.Shipped:
+                    subject = $"Order Shipped - #{orderId}";
+                    body = $@"
+                <div style='font-family:Arial; line-height:1.6'>
+                    <h2 style='color:#b2760b;'>Order Shipped</h2>
+                    <p>Dear {customerName},</p>
+                    <p>Your order <strong>#{orderId}</strong> has been shipped.</p>
+                    <p>It is on the way 🚚</p>
+                </div>";
+                    break;
+
+                case OrderStatus.Delivered:
+                    subject = $"Order Delivered - #{orderId}";
+                    body = $@"
+                <div style='font-family:Arial; line-height:1.6'>
+                    <h2 style='color:#b2760b;'>Order Delivered</h2>
+                    <p>Dear {customerName},</p>
+                    <p>Your order <strong>#{orderId}</strong> has been delivered.</p>
+                    <p>We hope you enjoy your purchase ❤️</p>
+                </div>";
+
+                    // Optional
+                    // pdfBytes = GenerateInvoice(order);
+
+                    break;
+
+                case OrderStatus.Cancelled:
+                    subject = $"Order Cancelled - #{orderId}";
+                    body = $@"
+                <div style='font-family:Arial; line-height:1.6'>
+                    <h2 style='color:#b2760b;'>Order Cancelled</h2>
+                    <p>Dear {customerName},</p>
+                    <p>Your order <strong>#{orderId}</strong> has been cancelled.</p>
+                    <p>If you have questions, contact support.</p>
+                </div>";
+                    break;
+
+                case OrderStatus.Returned:
+                    subject = $"Order Returned - #{orderId}";
+                    body = $@"
+                <div style='font-family:Arial; line-height:1.6'>
+                    <h2 style='color:#b2760b;'>Order Returned</h2>
+                    <p>Dear {customerName},</p>
+                    <p>Your return for order <strong>#{orderId}</strong> has been processed.</p>
+                    <p>Refund (if applicable) will be issued soon.</p>
+                </div>";
+                    break;
+            }
+
+            // ✅ Only send for defined statuses
+            if (!string.IsNullOrEmpty(subject))
+            {
+                await _emailService.SendEmailAsync(
+                    _emailSettings.From,
+                    customerEmail,
+                    subject,
+                    body,
+                    pdfBytes,
+                    $"Invoice_{orderId}.pdf"
+                );
+            }
+        }
+        catch (Exception ex)
+        { 
+            Console.WriteLine($"Email failed: {ex.Message}");
+        }
+    }
 }
