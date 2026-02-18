@@ -1,11 +1,12 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading.Tasks;
 using JeweleryAppBackend.Models;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Tasks;
 namespace JeweleryAppBackend.Controllers;
 
 [Route("api/[controller]")]
@@ -13,10 +14,11 @@ namespace JeweleryAppBackend.Controllers;
 public class CategoriesController : ControllerBase
 {
 	private readonly ApplicationDbContext _context;
-
-	public CategoriesController(ApplicationDbContext context)
+    private readonly IMemoryCache _cache;
+    public CategoriesController(ApplicationDbContext context, IMemoryCache cache)
 	{
 		_context = context;
+		_cache = cache;
 	}
 
 	[HttpGet("GetAllMain")]
@@ -31,53 +33,80 @@ public class CategoriesController : ControllerBase
 
     [HttpGet("GetAllNavCategories")]
     public async Task<ActionResult<List<NavCategoryDto>>> GetAllNavCategories()
-    { 
-        // Step 2: Get those categories
-        var categories = await _context.Categories
-            //.Where(x => categoryIds.Contains(x.Id))
-            .ToListAsync();
+    {
+        string cacheKey = "NAV_CATEGORIES";
 
-        // Step 3: Get missing parents
-        var parentIds = categories
-            .Where(x => x.ParentId != null)
-            .Select(x => x.ParentId.Value)
-            .Distinct()
-            .ToList();
-
-        var parents = await _context.Categories
-            .Where(x => parentIds.Contains(x.Id))
-            .ToListAsync();
-
-        // Step 4: Merge both
-        var allCategories = categories
-            .Concat(parents)
-            .DistinctBy(x => x.Id)
-            .ToList();
-
-        var result = new List<NavCategoryDto>();
-
-        // Step 5: Build structure
-        var parentCategories = allCategories
-            .Where(x => x.ParentId == null)
-            .ToList();
-
-        foreach (var parent in parentCategories)
+        // ✅ Try cache first
+        if (_cache.TryGetValue(cacheKey, out List<NavCategoryDto> cachedData))
         {
-            var children = allCategories
-                .Where(x => x.ParentId == parent.Id)
-                .ToList();
-
-            result.Add(new NavCategoryDto
-            {
-                Id = parent.Id,
-                Name = parent.Name,
-                Children = children.Select(c => new NavCategoryDto
-                {
-                    Id = c.Id,
-                    Name = c.Name
-                }).ToList()
-            });
+            return cachedData;
         }
+
+        // ✅ Single DB call (no duplicate queries)
+        var categories = await _context.Categories
+            .Select(x => new
+            {
+                x.Id,
+                x.Name,
+                x.ParentId
+            })
+            .ToListAsync();
+
+        // ✅ Dictionary for O(1) lookup
+        var lookup = categories.ToDictionary(x => x.Id);
+
+        // ✅ Prepare result dictionary (parent -> dto)
+        var parentMap = new Dictionary<Guid, NavCategoryDto>();
+
+        foreach (var cat in categories)
+        {
+            // ✅ If parent
+            if (cat.ParentId == null)
+            {
+                if (!parentMap.ContainsKey(cat.Id))
+                {
+                    parentMap[cat.Id] = new NavCategoryDto
+                    {
+                        Id = cat.Id,
+                        Name = cat.Name,
+                        Children = new List<NavCategoryDto>()
+                    };
+                }
+            }
+            else
+            {
+                // ✅ Ensure parent exists
+                if (lookup.TryGetValue(cat.ParentId.Value, out var parent))
+                {
+                    if (!parentMap.ContainsKey(parent.Id))
+                    {
+                        parentMap[parent.Id] = new NavCategoryDto
+                        {
+                            Id = parent.Id,
+                            Name = parent.Name,
+                            Children = new List<NavCategoryDto>()
+                        };
+                    }
+
+                    // ✅ Add child
+                    parentMap[parent.Id].Children.Add(new NavCategoryDto
+                    {
+                        Id = cat.Id,
+                        Name = cat.Name
+                    });
+                }
+            }
+        }
+
+        var result = parentMap.Values.ToList();
+
+        // ✅ Cache options
+        var cacheOptions = new MemoryCacheEntryOptions()
+            .SetSlidingExpiration(TimeSpan.FromMinutes(30))
+            .SetAbsoluteExpiration(TimeSpan.FromHours(2));
+
+        // ✅ Store in cache
+        _cache.Set(cacheKey, result, cacheOptions);
 
         return result;
     }
@@ -175,7 +204,8 @@ public class CategoriesController : ControllerBase
 		};
 		_context.Categories.Add(category);
 		await _context.SaveChangesAsync();
-		return Ok(model);
+        _cache.Remove("NAV_CATEGORIES");
+        return Ok(model);
 	}
 
 	[HttpPut("Update")]
@@ -186,7 +216,8 @@ public class CategoriesController : ControllerBase
 		existingCategory.Name = model.Name;
 		existingCategory.ParentId = model.ParentId;
 		await _context.SaveChangesAsync();
-		return Ok(model);
+        _cache.Remove("NAV_CATEGORIES");
+        return Ok(model);
 	}
 
 	[HttpDelete("Delete")]

@@ -49,7 +49,7 @@ namespace JeweleryAppBackend.Controllers
             return Ok(heroes);
         }
         [HttpGet("GetAll")]
-        [Authorize(Roles ="Admin")]
+        [Authorize(Roles = "Admin")]
         public async Task<ActionResult<List<HeroDto>>> GetAll(
     int skip = 0,
     int take = 10,
@@ -87,11 +87,12 @@ namespace JeweleryAppBackend.Controllers
                 .ToListAsync();
 
             return Ok(new
-            { 
+            {
                 data
             });
         }
         [HttpGet("GetAllCount")]
+        [Authorize(Roles = "Admin")]
         public async Task<ActionResult<int>> GetAllCount()
         {
             var count = await _context.HeroSections.CountAsync();
@@ -99,14 +100,16 @@ namespace JeweleryAppBackend.Controllers
         }
         // ✅ CREATE / UPDATE HERO
         [HttpPost]
+        [Authorize(Roles = "Admin")]
         public async Task<IActionResult> CreateHero(
-            [FromForm] string title,
-            [FromForm] string subtitle,
-            [FromForm] int displayOrder,
-            IFormFile image)
+    [FromForm] string title,
+    [FromForm] string subtitle,
+    [FromForm] int displayOrder,
+    IFormFile image)
         {
             string imagePath = null;
 
+            // ✅ Upload Image
             if (image != null)
             {
                 var folder = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot/hero");
@@ -125,8 +128,30 @@ namespace JeweleryAppBackend.Controllers
                 imagePath = $"hero/{fileName}";
             }
 
+            int total = await _context.HeroSections.CountAsync();
+
+            // ✅ Clamp
+            if (displayOrder < 1) displayOrder = 1;
+            if (displayOrder > total + 1) displayOrder = total + 1;
+
+            // ✅ Shift if conflict
+            bool exists = await _context.HeroSections
+                .AnyAsync(x => x.DisplayOrder == displayOrder);
+
+            if (exists)
+            {
+                var toShift = await _context.HeroSections
+                    .Where(x => x.DisplayOrder >= displayOrder)
+                    .OrderByDescending(x => x.DisplayOrder)
+                    .ToListAsync();
+
+                foreach (var h in toShift)
+                    h.DisplayOrder++;
+            }
+
             var hero = new HeroSection
             {
+                Id = Guid.NewGuid(), // ✅ GUID
                 Title = title,
                 Subtitle = subtitle,
                 ImagePath = imagePath,
@@ -136,12 +161,154 @@ namespace JeweleryAppBackend.Controllers
             };
 
             _context.HeroSections.Add(hero);
-            await _context.SaveChangesAsync();
 
-            // ✅ CLEAR CACHE (IMPORTANT)
+            try
+            {
+                await _context.SaveChangesAsync();
+            }
+            catch (DbUpdateException)
+            {
+                return BadRequest("Display order conflict occurred.");
+            }
+
             _cache.Remove("hero_list");
 
-            return Ok();
+            return Ok(new { message = "Hero created successfully" });
+        }
+        [HttpDelete("{id}")]
+        [Authorize(Roles = "Admin")]
+        public async Task<IActionResult> DeleteHero(Guid id)
+        {
+            var hero = await _context.HeroSections.FindAsync(id);
+
+            if (hero == null)
+                return NotFound("Hero not found");
+
+            int deletedOrder = hero.DisplayOrder;
+
+            // ✅ Delete image
+            if (!string.IsNullOrEmpty(hero.ImagePath))
+            {
+                var path = Path.Combine(
+                    Directory.GetCurrentDirectory(),
+                    "wwwroot",
+                    hero.ImagePath.Replace("/", Path.DirectorySeparatorChar.ToString())
+                );
+
+                if (System.IO.File.Exists(path))
+                    System.IO.File.Delete(path);
+            }
+
+            _context.HeroSections.Remove(hero);
+            await _context.SaveChangesAsync();
+
+            // ✅ Reorder remaining (gap-free)
+            var toShift = await _context.HeroSections
+                .Where(x => x.DisplayOrder > deletedOrder)
+                .ToListAsync();
+
+            foreach (var h in toShift)
+                h.DisplayOrder--;
+
+            await _context.SaveChangesAsync();
+
+            _cache.Remove("hero_list");
+
+            return Ok(new { message = "Hero deleted successfully" });
+        }
+        [HttpPut("{id}")]
+        public async Task<IActionResult> UpdateHero(
+       Guid id,
+       [FromForm] string title,
+       [FromForm] string subtitle,
+       [FromForm] int displayOrder,
+       IFormFile image)
+        {
+            var hero = await _context.HeroSections.FindAsync(id);
+
+            if (hero == null)
+                return NotFound("Hero not found");
+
+            int oldOrder = hero.DisplayOrder;
+
+            // ✅ Image update
+            if (image != null)
+            {
+                if (!string.IsNullOrEmpty(hero.ImagePath))
+                {
+                    var oldPath = Path.Combine(
+                        Directory.GetCurrentDirectory(),
+                        "wwwroot",
+                        hero.ImagePath.Replace("/", Path.DirectorySeparatorChar.ToString())
+                    );
+
+                    if (System.IO.File.Exists(oldPath))
+                        System.IO.File.Delete(oldPath);
+                }
+
+                var folder = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot/hero");
+
+                if (!Directory.Exists(folder))
+                    Directory.CreateDirectory(folder);
+
+                var fileName = Guid.NewGuid() + Path.GetExtension(image.FileName);
+                var filePath = Path.Combine(folder, fileName);
+
+                using (var stream = new FileStream(filePath, FileMode.Create))
+                {
+                    await image.CopyToAsync(stream);
+                }
+
+                hero.ImagePath = $"hero/{fileName}";
+            }
+
+            int total = await _context.HeroSections.CountAsync();
+
+            // ✅ Clamp
+            if (displayOrder < 1) displayOrder = 1;
+            if (displayOrder > total) displayOrder = total;
+
+            // ✅ Reorder if needed
+            if (displayOrder != oldOrder)
+            {
+                if (displayOrder < oldOrder)
+                {
+                    var toShift = await _context.HeroSections
+                        .Where(x => x.DisplayOrder >= displayOrder && x.DisplayOrder < oldOrder && x.Id != id)
+                        .ToListAsync();
+
+                    foreach (var h in toShift)
+                        h.DisplayOrder++;
+                }
+                else
+                {
+                    var toShift = await _context.HeroSections
+                        .Where(x => x.DisplayOrder <= displayOrder && x.DisplayOrder > oldOrder && x.Id != id)
+                        .ToListAsync();
+
+                    foreach (var h in toShift)
+                        h.DisplayOrder--;
+                }
+
+                hero.DisplayOrder = displayOrder;
+            }
+
+            hero.Title = title;
+            hero.Subtitle = subtitle;
+            hero.UpdatedAt = DateTime.UtcNow;
+
+            try
+            {
+                await _context.SaveChangesAsync();
+            }
+            catch (DbUpdateException)
+            {
+                return BadRequest("Display order conflict occurred.");
+            }
+
+            _cache.Remove("hero_list");
+
+            return Ok(new { message = "Hero updated successfully" });
         }
     }
 }

@@ -75,6 +75,7 @@ yarn-error.log*
 # =========================
 wwwroot/dist/
 wwwroot/build/
+wwwroot/hero/
 
 # =========================
 # Entity Framework

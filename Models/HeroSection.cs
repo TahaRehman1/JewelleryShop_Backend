@@ -4,7 +4,7 @@ namespace JeweleryAppBackend.Models
 {
     public class HeroSection
     {
-        public int Id { get; set; }
+        public Guid Id { get; set; }
         public string Title { get; set; }
         public string Subtitle { get; set; }
         public string ImagePath { get; set; }
