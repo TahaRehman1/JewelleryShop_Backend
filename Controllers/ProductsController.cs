@@ -137,30 +137,47 @@ public class ProductsController : ControllerBase
     //	}
     //	return Ok(list);
     //}
-    [HttpPost("GetUserProducts")]
+    [HttpPost("GetUserProducts")]  
     public async Task<ActionResult<List<ProductViewModel>>> GetUserProducts(UserProductsSearchModel model)
     {
-        string cacheKey = $"products_search_{System.Text.Json.JsonSerializer.Serialize(model)}";
+        // ✅ NORMALIZED CACHE KEY
+        var cacheKey = $"products_" +
+            $"{string.Join(",", model.CategoryIds.OrderBy(x => x))}_" +
+            $"{string.Join(",", model.SpecificationIds.OrderBy(x => x))}_" +
+            $"{model.Name}_{model.StartPrice}_{model.EndPrice}_{model.Sort}_{model.Skip}_{model.Take}";
 
         if (_cache.TryGetValue(cacheKey, out List<ProductViewModel> cached))
             return Ok(cached);
 
         IQueryable<ProductModel> query = _context.Products.AsNoTracking();
 
+        // ✅ CATEGORY FILTER
         if (model.CategoryIds.Any())
             query = query.Where(p => model.CategoryIds.Contains(p.CategoryId) && p.IsActive);
+        else
+            query = query.Where(p => p.IsActive);
 
+        // ✅ 🔥 FIXED SPEC FILTER (NO CORRELATED SUBQUERY)
         if (model.SpecificationIds.Any())
         {
-            query = query.Where(p =>
-                _context.ProductSpecifications.Any(x =>
-                    x.ProductId == p.Id &&
-                    model.SpecificationIds.Contains(x.SpecificationId)));
+            var filteredProductIds = await _context.ProductSpecifications
+                .AsNoTracking()
+                .Where(x => model.SpecificationIds.Contains(x.SpecificationId))
+                .Select(x => x.ProductId)
+                .Distinct()
+                .ToListAsync();
+
+            if (!filteredProductIds.Any())
+                return Ok(new List<ProductViewModel>());
+
+            query = query.Where(p => filteredProductIds.Contains(p.Id));
         }
 
-        if (!string.IsNullOrEmpty(model.Name))
+        // ✅ NAME FILTER
+        if (!string.IsNullOrWhiteSpace(model.Name))
             query = query.Where(p => p.Name.Contains(model.Name));
 
+        // ✅ PRICE FILTER
         if (model.StartPrice.HasValue)
         {
             query = GetProductsByCategoryAndPriceRange(
@@ -172,6 +189,7 @@ public class ProductsController : ControllerBase
             );
         }
 
+        // ✅ SORT
         query = model.Sort switch
         {
             "name asc" => query.OrderBy(x => x.Name),
@@ -179,6 +197,7 @@ public class ProductsController : ControllerBase
             _ => query.OrderBy(x => x.Price)
         };
 
+        // ✅ PAGINATION
         var products = await query
             .Skip(model.Skip)
             .Take(model.Take)
@@ -190,8 +209,8 @@ public class ProductsController : ControllerBase
         var productIds = products.Select(p => p.Id).ToList();
         var categoryIds = products.Select(p => p.CategoryId).Distinct().ToList();
 
-        // ✅ LOAD DATA IN BULK
-        var categories = await _context.Categories
+        // ✅ 🚫 NO PARALLEL DB CALLS (FIXED ERROR)
+        var categories = await _context.Categories.AsNoTracking()
             .Where(c => categoryIds.Contains(c.Id))
             .ToDictionaryAsync(c => c.Id);
 
@@ -200,12 +219,35 @@ public class ProductsController : ControllerBase
             .Where(x => productIds.Contains(x.ProductId))
             .ToListAsync();
 
-        var specifications = await _context.ProductSpecifications
-            .AsNoTracking()
-            .Where(x => productIds.Contains(x.ProductId))
-            .ToListAsync();
+        var specifications = await (
+            from ps in _context.ProductSpecifications.AsNoTracking()
+            join s in _context.Specifications on ps.SpecificationId equals s.Id
+            where productIds.Contains(ps.ProductId)
+            select new
+            {
+                ps.ProductId,
+                ps.SpecificationId,
+                s.Name,
+                s.Value,
+                ps.Price
+            }
+        ).ToListAsync();
 
-        // ✅ MAP IMAGES (FIXED)
+        // ✅ IMAGE CACHE (PREVENT DISK HIT)
+        string GetBase64Cached(string path, string name)
+        {
+            if (string.IsNullOrEmpty(path) || !System.IO.File.Exists(path))
+                return null;
+
+            return _cache.GetOrCreate($"img_{path}", entry =>
+            {
+                entry.SetSlidingExpiration(TimeSpan.FromMinutes(10));
+                return _imageService.GetBase64Prefix(name) +
+                       Convert.ToBase64String(System.IO.File.ReadAllBytes(path));
+            });
+        }
+
+        // ✅ IMAGE LOOKUP
         var imageLookup = images
             .GroupBy(x => x.ProductId)
             .ToDictionary(
@@ -214,21 +256,28 @@ public class ProductsController : ControllerBase
                 {
                     Id = img.Id,
                     Name = img.Name,
-
-                    // 🔥 Convert file path → Base64
-                    Base64 = System.IO.File.Exists(img.Src)
-                        ? _imageService.GetBase64Prefix(img.Name) + Convert.ToBase64String(System.IO.File.ReadAllBytes(img.Src))
-                        : null,
-
-                    ZoomedBase64 = System.IO.File.Exists(img.ZoomedImageSrc)
-                        ? _imageService.GetBase64Prefix(img.Name) +  Convert.ToBase64String(System.IO.File.ReadAllBytes(img.ZoomedImageSrc))
-                        : null,
-
+                    Base64 = GetBase64Cached(img.Src, img.Name),
+                    ZoomedBase64 = GetBase64Cached(img.ZoomedImageSrc, img.Name),
                     SpecificationId = img.SpecificationId
                 }).ToList()
             );
 
-        // ✅ BUILD RESPONSE (FIXED SPECIFICATIONS)
+        // ✅ SPEC LOOKUP
+        var specLookup = specifications
+            .GroupBy(x => x.ProductId)
+            .ToDictionary(
+                g => g.Key,
+                g => g.Select(s => new ProductSpecificationViewModel
+                {
+                    Id = s.SpecificationId,
+                    ProductId = s.ProductId,
+                    Name = s.Name,
+                    Value = s.Value,
+                    Price = s.Price
+                }).ToList()
+            );
+
+        // ✅ FINAL MAPPING
         var result = products.Select(p => new ProductViewModel
         {
             Id = p.Id,
@@ -237,31 +286,18 @@ public class ProductsController : ControllerBase
             DetailedDescription = p.DetailedDescription,
             Price = p.Price,
             CategoryId = p.CategoryId,
-            Category = categories.ContainsKey(p.CategoryId)
-                ? categories[p.CategoryId]
-                : null,
-            Images = imageLookup.ContainsKey(p.Id)
-                ? imageLookup[p.Id]
-                : new List<ProductImageViewModel>(),
+            Category = categories.GetValueOrDefault(p.CategoryId),
+            Images = imageLookup.GetValueOrDefault(p.Id) ?? new List<ProductImageViewModel>(),
             Code = p.Code,
-
-            // 🔥 FIXED: match your ViewModel fields
-            Specifications = specifications
-                .Where(s => s.ProductId == p.Id)
-                .Select(s => new ProductSpecificationViewModel
-                {
-                    Id = s.Id,
-                    ProductId = s.ProductId
-                    // ❗ removed SpecificationId because your VM doesn't have it
-                }).ToList()
+            Specifications = specLookup.GetValueOrDefault(p.Id) ?? new List<ProductSpecificationViewModel>()
         }).ToList();
 
         // ✅ CACHE
-        var cacheOptions = new MemoryCacheEntryOptions()
-            .SetAbsoluteExpiration(TimeSpan.FromMinutes(5))
-            .SetSlidingExpiration(TimeSpan.FromMinutes(2));
-
-        _cache.Set(cacheKey, result, cacheOptions);
+        _cache.Set(cacheKey, result, new MemoryCacheEntryOptions
+        {
+            AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(5),
+            SlidingExpiration = TimeSpan.FromMinutes(2)
+        });
 
         return Ok(result);
     }
