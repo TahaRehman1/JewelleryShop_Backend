@@ -227,6 +227,7 @@ public class CategoriesController : ControllerBase
 		CategoryModel CategoryModel = await _context.Categories.FindAsync(id);
 		_context.Categories.Remove(CategoryModel);
 		await _context.SaveChangesAsync();
-		return NoContent();
+        _cache.Remove("NAV_CATEGORIES");
+        return NoContent();
 	}
 }

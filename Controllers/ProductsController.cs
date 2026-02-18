@@ -1,15 +1,16 @@
-using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 using JeweleryAppBackend.Models;
 using JeweleryAppBackend.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
 
 namespace JeweleryAppBackend.Controllers;
 
@@ -22,12 +23,14 @@ public class ProductsController : ControllerBase
 	private ProductService _productService;
 
 	private ImageService _imageService;
+    private readonly IMemoryCache _cache;
 
-	public ProductsController(ApplicationDbContext context, ProductService productService, ImageService imageService)
+    public ProductsController(IMemoryCache cache,ApplicationDbContext context, ProductService productService, ImageService imageService)
 	{
 		_context = context;
 		_productService = productService;
 		_imageService = imageService;
+		_cache = cache;
 	}
 
     [HttpGet("GetAll")]
@@ -304,39 +307,53 @@ public class ProductsController : ControllerBase
     [HttpGet("GetByCode")]
     public async Task<ActionResult<ProductViewModel>> GetProduct(string code)
     {
-        var product = await _context.Products
-            .Include(p => p.Category)
-                .ThenInclude(c => c.Parent)
-            .FirstOrDefaultAsync(x => x.Code == code);
+        string cacheKey = $"product_{code}";
 
-        if (product == null)
-            return NotFound();
+        if (!_cache.TryGetValue(cacheKey, out ProductViewModel cachedProduct))
+        {
+            var product = await _context.Products
+                .Include(p => p.Category)
+                    .ThenInclude(c => c.Parent)
+                .FirstOrDefaultAsync(x => x.Code == code);
 
-        return await GetProductModel(product);
+            if (product == null)
+                return NotFound();
+
+            cachedProduct = await GetProductModel(product);
+
+            var cacheOptions = new MemoryCacheEntryOptions
+            {
+                AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(10), // 🔥 adjust as needed
+                SlidingExpiration = TimeSpan.FromMinutes(5)
+            };
+
+            _cache.Set(cacheKey, cachedProduct, cacheOptions);
+        }
+
+        return Ok(cachedProduct);
+    }
+    private async Task<ProductViewModel> GetProductModel(ProductModel product)
+    {
+        var images = await _productService.GetProductImages(product.Id);
+        var specifications = await GetAllProductSpecifications(product.Id);
+
+        return new ProductViewModel
+        {
+            Id = product.Id,
+            Name = product.Name,
+            Description = product.Description,
+            DetailedDescription = product.DetailedDescription,
+            Price = product.Price,
+            CategoryId = product.CategoryId,
+            Code = product.Code,
+            Category = product.Category,
+            Images = images,
+            IsActive = product.IsActive,
+            Specifications = specifications
+        };
     }
 
-    private async Task<ProductViewModel> GetProductModel(ProductModel product)
-	{
-		List<ProductImageViewModel> images = await _productService.GetProductImages(product.Id);
-		CategoryModel category = await _context.Categories.FindAsync(product.CategoryId);
-		List<ProductSpecificationViewModel> specifications = await GetAllProductSpecifications(product.Id);
-		return new ProductViewModel
-		{
-			Id = product.Id,
-			Name = product.Name,
-			Description = product.Description,
-			DetailedDescription = product.DetailedDescription,
-			Price = product.Price,
-			CategoryId = product.CategoryId,
-			Code = product.Code,
-			Category = category,
-			Images = images,
-			IsActive = product.IsActive,
-			Specifications = specifications
-		};
-	}
-
-	[HttpPost("Post")]
+    [HttpPost("Post")]
 	[Authorize(Roles = "Admin")]
 	public async Task<ActionResult<ProductModel>> PostProduct(AddProductModel product)
 	{
@@ -354,61 +371,100 @@ public class ProductsController : ControllerBase
 		};
 		_context.Products.Add(newProduct);
 		await _context.SaveChangesAsync();
-		return Ok(newProduct);
+        _cache.Remove($"product_{product.Code}");
+        return Ok(newProduct);
 	}
 
 	[HttpPost("UpdateProductImages")]
 	[Authorize(Roles = "Admin")]
-	public async Task<IActionResult> UpdateProductImages([FromForm] AddProductImagesModel product)
-	{
-		_ = 3;
-		try
-		{
-			if (product.Images != null && product.Images.Count > 0)
-			{
-				foreach (IFormFile image in product.Images)
-				{
-					if (image.Length > 0)
-					{
-						string directoryPath = Path.Combine(Directory.GetCurrentDirectory(), "Images", "ProductImages", product.ProductId.ToString());
-						if (!Directory.Exists(directoryPath))
-						{
-							Directory.CreateDirectory(directoryPath);
-						}
-						string filePath = Path.Combine(directoryPath, image.FileName);
-						using (FileStream stream = new FileStream(filePath, FileMode.Create))
-						{
-							await image.CopyToAsync(stream);
-						}
-						IFormFile zoomedImage = await _imageService.ResizeImageAsync(image);
-						string zoomedImageFilePath = Path.Combine(directoryPath, zoomedImage.FileName);
-						using (FileStream stream = new FileStream(zoomedImageFilePath, FileMode.Create))
-						{
-							await zoomedImage.CopyToAsync(stream);
-						}
-						ProductImagesModel productImage = new ProductImagesModel
-						{
-							Id = Guid.NewGuid(),
-							Src = filePath,
-							ZoomedImageSrc = zoomedImageFilePath,
-							ProductId = product.ProductId,
-							IsTitleImage = false,
-							Name = image.FileName
-						};
-						_context.ProductImages.Add(productImage);
-					}
-				}
-			}
-			await _context.SaveChangesAsync();
-			return Ok();
-		}
-		catch (Exception ex)
-		{
-			throw ex;
-		}
-	}
+    [HttpPost]
+    public async Task<IActionResult> UpdateProductImages([FromForm] AddProductImagesModel product)
+    {
+        try
+        {
+            if (product.Images == null || product.Images.Count == 0)
+                return BadRequest("No images provided.");
 
-	[HttpPut("Update")]
+            string directoryPath = Path.Combine(
+                Directory.GetCurrentDirectory(),
+                "Images",
+                "ProductImages",
+                product.ProductId.ToString()
+            );
+
+            if (!Directory.Exists(directoryPath))
+                Directory.CreateDirectory(directoryPath);
+
+            foreach (var image in product.Images)
+            {
+                if (image == null || image.Length == 0)
+                    continue;
+
+                // 🔥 Process main image (WebP)
+                var processedImage = await _imageService.ResizeImageAsync(
+                    image,
+                    maxSize: 1200,
+                    convertToWebp: true,
+                    quality: 75
+                );
+
+                // 🔥 Process zoom image (higher quality)
+                var zoomedImage = await _imageService.ResizeImageAsync(
+                    image,
+                    maxSize: 2000,
+                    convertToWebp: true,
+                    quality: 85
+                );
+
+                // ✅ Keep SAME naming style (but fix overwrite issue)
+                string baseName = Path.GetFileNameWithoutExtension(image.FileName);
+
+                string fileName = $"{baseName}-{Guid.NewGuid()}.webp";
+                string zoomFileName = $"{baseName}-zoom-{Guid.NewGuid()}.webp";
+
+                string filePath = Path.Combine(directoryPath, fileName);
+                string zoomedImageFilePath = Path.Combine(directoryPath, zoomFileName);
+
+                // 💾 Save main image
+                using (var stream = new FileStream(filePath, FileMode.Create))
+                {
+                    await processedImage.CopyToAsync(stream);
+                }
+
+                // 💾 Save zoom image
+                using (var stream = new FileStream(zoomedImageFilePath, FileMode.Create))
+                {
+                    await zoomedImage.CopyToAsync(stream);
+                }
+
+                // ✅ KEEP SAME DB PATH STYLE (absolute path like before)
+                ProductImagesModel productImage = new ProductImagesModel
+                {
+                    Id = Guid.NewGuid(),
+                    Src = filePath,
+                    ZoomedImageSrc = zoomedImageFilePath,
+                    ProductId = product.ProductId,
+                    IsTitleImage = false,
+                    Name = image.FileName
+                };
+
+                _context.ProductImages.Add(productImage);
+            }
+
+            await _context.SaveChangesAsync();
+
+            return Ok(new
+            {
+                message = "Images uploaded successfully 🚀"
+            });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, ex.Message);
+        }
+    }
+
+    [HttpPut("Update")]
 	[Authorize(Roles = "Admin")]
 	public async Task<IActionResult> Update(ProductModel product)
 	{
@@ -430,7 +486,8 @@ public class ProductsController : ControllerBase
 			existingProduct.CategoryId = product.CategoryId;
 			existingProduct.IsActive = product.IsActive;
 			await _context.SaveChangesAsync();
-			return Ok();
+            _cache.Remove($"product_{product.Code}");
+            return Ok();
 		}
 		catch (Exception)
 		{
@@ -449,7 +506,8 @@ public class ProductsController : ControllerBase
 		}
 		_context.Products.Remove(product);
 		await _context.SaveChangesAsync();
-		return NoContent();
+        _cache.Remove($"product_{product.Code}");
+        return NoContent();
 	}
 
 	[HttpDelete("DeleteProductImage")]

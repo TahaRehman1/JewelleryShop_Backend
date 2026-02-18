@@ -1,86 +1,65 @@
-using System.Drawing;
-using System.Drawing.Drawing2D;
-using System.Drawing.Imaging;
+using System;
 using System.IO;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.Formats.Webp;
+using SixLabors.ImageSharp.Processing;
 
-namespace JeweleryAppBackend.Services;
-
-public class ImageService
+namespace JeweleryAppBackend.Services
 {
-	public async Task<IFormFile> ResizeImageAsync(IFormFile file)
-	{
-		if (file == null || file.Length == 0L)
-		{
-			return null;
-		}
-		using MemoryStream memoryStream = new MemoryStream();
-		await file.CopyToAsync(memoryStream);
-		byte[] imageBytes = memoryStream.ToArray();
-		using MemoryStream inputStream = new MemoryStream(imageBytes);
-		using Image originalImage = Image.FromStream(inputStream);
-		Bitmap resizedImage = new Bitmap(1200, 1200);
-		using (Graphics graphics = Graphics.FromImage(resizedImage))
-		{
-			graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
-			graphics.DrawImage(originalImage, 0, 0, 1200, 1200);
-		}
-		MemoryStream resizedImageStream = new MemoryStream();
-		ImageFormat format = GetImageFormat(file.FileName);
-		resizedImage.Save(resizedImageStream, format);
-		resizedImageStream.Position = 0L;
-		string originalFileNameWithoutExtension = Path.GetFileNameWithoutExtension(file.FileName);
-		string newFileName = originalFileNameWithoutExtension + "-zoomed" + Path.GetExtension(file.FileName);
-		return new FormFile(resizedImageStream, 0L, resizedImageStream.Length, newFileName, newFileName)
-		{
-			Headers = new HeaderDictionary(),
-			ContentType = GetContentType(format)
-		};
-	}
+    public class ImageService
+    { 
+        public async Task<IFormFile> ResizeImageAsync(
+            IFormFile file,
+            int maxSize = 1200,
+            bool convertToWebp = true,
+            int quality = 75 // ✅ NOW SUPPORTED
+        )
+        {
+            if (file == null || file.Length == 0)
+                return null;
 
-	private ImageFormat GetImageFormat(string fileName)
-	{
-		switch (Path.GetExtension(fileName).ToLowerInvariant())
-		{
-		case ".jpg":
-		case ".jpeg":
-			return ImageFormat.Jpeg;
-		case ".png":
-			return ImageFormat.Png;
-		case ".gif":
-			return ImageFormat.Gif;
-		case ".bmp":
-			return ImageFormat.Bmp;
-		case ".tiff":
-			return ImageFormat.Tiff;
-		default:
-			return ImageFormat.Jpeg;
-		}
-	}
+            if (!file.ContentType.StartsWith("image/"))
+                throw new Exception("Invalid file type.");
 
-	private string GetContentType(ImageFormat format)
-	{
-		if (format == ImageFormat.Jpeg)
-		{
-			return "image/jpeg";
-		}
-		if (format == ImageFormat.Png)
-		{
-			return "image/png";
-		}
-		if (format == ImageFormat.Gif)
-		{
-			return "image/gif";
-		}
-		if (format == ImageFormat.Bmp)
-		{
-			return "image/bmp";
-		}
-		if (format == ImageFormat.Tiff)
-		{
-			return "image/tiff";
-		}
-		return "application/octet-stream";
-	}
+            using var image = await Image.LoadAsync(file.OpenReadStream());
+
+            // ✅ Resize (aspect ratio safe)
+            image.Mutate(x => x.Resize(new ResizeOptions
+            {
+                Mode = ResizeMode.Max,
+                Size = new Size(maxSize, maxSize)
+            }));
+
+            var outputStream = new MemoryStream();
+
+            if (convertToWebp)
+            {
+                var encoder = new WebpEncoder
+                {
+                    Quality = quality // ✅ USED HERE
+                };
+
+                await image.SaveAsync(outputStream, encoder);
+
+                return new FormFile(outputStream, 0, outputStream.Length, file.Name,
+                    Path.GetFileNameWithoutExtension(file.FileName) + ".webp")
+                {
+                    Headers = new HeaderDictionary(),
+                    ContentType = "image/webp"
+                };
+            }
+            else
+            {
+                await image.SaveAsync(outputStream, image.Metadata.DecodedImageFormat);
+
+                return new FormFile(outputStream, 0, outputStream.Length, file.Name, file.FileName)
+                {
+                    Headers = new HeaderDictionary(),
+                    ContentType = file.ContentType
+                };
+            }
+        }
+    }
 }

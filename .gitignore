@@ -127,3 +127,5 @@ packages/
 # =========================
 _ReSharper*/
 *.DotSettings.user
+
+Images/ProductImages/
