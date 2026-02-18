@@ -301,7 +301,10 @@ public class ProductsController : ControllerBase
 	[Authorize(Roles = "Admin")]
 	public async Task<ActionResult<ProductViewModel>> GetProduct(Guid id)
 	{
-		return await GetProductModel(await _context.Products.FindAsync(id));
+		return await GetProductModel(await _context.Products
+                .Include(p => p.Category)
+                    .ThenInclude(c => c.Parent)
+                .FirstOrDefaultAsync(x => x.Id == id));
 	}
 
     [HttpGet("GetByCode")]
