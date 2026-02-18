@@ -11,10 +11,12 @@ namespace JeweleryAppBackend.Services;
 public class ProductService
 {
 	private readonly ApplicationDbContext _context;
+    private readonly ImageService _imageService;
 
-	public ProductService(ApplicationDbContext context)
+    public ProductService(ApplicationDbContext context, ImageService imageService)
 	{
 		_context = context;
+		_imageService = imageService;
 	}
 
 	public async Task<List<ProductImageViewModel>> GetProductImages(Guid productId)
@@ -32,23 +34,11 @@ public class ProductService
 					{
 						if (File.Exists(productImage.Src))
 						{
-							string mimeType = "image/png";
-							if (productImage.Name.EndsWith(".jpg") || productImage.Name.EndsWith(".jpeg"))
-							{
-								mimeType = "image/jpeg";
-							}
-							else if (productImage.Name.EndsWith(".gif"))
-							{
-								mimeType = "image/gif";
-							}
-							else if (productImage.Name.EndsWith(".svg"))
-							{
-								mimeType = "image/svg+xml";
-							}
-							string base64String = Convert.ToBase64String(await File.ReadAllBytesAsync(productImage.Src));
-							string dataUrl = "data:" + mimeType + ";base64," + base64String;
+							var base64Prefix = _imageService.GetBase64Prefix(productImage.Name); 
+                            string base64String = Convert.ToBase64String(await File.ReadAllBytesAsync(productImage.Src));
+							string dataUrl = base64Prefix + base64String;
 							string zoomedBase64String = Convert.ToBase64String(await File.ReadAllBytesAsync(productImage.ZoomedImageSrc));
-							string zoomedDataUrl = "data:" + mimeType + ";base64," + zoomedBase64String;
+							string zoomedDataUrl = base64Prefix + zoomedBase64String;
 							productViewImages.Add(new ProductImageViewModel
 							{
 								Base64 = dataUrl,

@@ -11,6 +11,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using static Orleans.Runtime.UniqueKey;
 
 namespace JeweleryAppBackend.Controllers;
 
@@ -86,58 +87,185 @@ public class ProductsController : ControllerBase
 		return await _context.Products.CountAsync();
 	}
 
-	[HttpPost("GetUserProducts")]
-	public async Task<ActionResult<List<ProductViewModel>>> GetUserProducts(UserProductsSearchModel model)
-	{
-		List<ProductViewModel> list = new List<ProductViewModel>();
-		if (model.CategoryIds.Any())
-		{
-			IQueryable<ProductModel> query = _context.Products.AsQueryable();
-			query = query.Where((ProductModel p) => model.CategoryIds.Contains(p.CategoryId) && p.IsActive);
-			if (model.SpecificationIds.Any())
-			{
-				query = query.Where((ProductModel p) => _context.ProductSpecifications.Any((ProductSpecificationModel x) => x.ProductId == p.Id && model.SpecificationIds.Contains(x.SpecificationId)));
-			}
-			if (!string.IsNullOrEmpty(model.Name))
-			{
-				query = query.Where((ProductModel p) => p.Name.Contains(model.Name));
-			}
-			if (model.StartPrice.HasValue)
-			{
-				query = GetProductsByCategoryAndPriceRange(query, model.CategoryIds.FirstOrDefault(), model.StartPrice.Value, model.EndPrice.Value, model.Sort);
-			}
-			if (model.Sort == "name asc")
-			{
-				query = query.OrderBy((ProductModel x) => x.Name);
-			}
-			if (model.Sort == "name desc")
-			{
-				query = query.OrderByDescending((ProductModel x) => x.Name);
-			}
-			foreach (ProductModel product in await query.Skip(model.Skip).Take(model.Take).ToListAsync())
-			{
-				List<ProductImageViewModel> images = await _productService.GetProductImages(product.Id);
-				CategoryModel category = await _context.Categories.FindAsync(product.CategoryId);
-				List<ProductSpecificationViewModel> specifications = await GetAllProductSpecifications(product.Id);
-				list.Add(new ProductViewModel
-				{
-					Id = product.Id,
-					Name = product.Name,
-					Description = product.Description,
-					DetailedDescription = product.DetailedDescription,
-					Price = product.Price,
-					CategoryId = product.CategoryId,
-					Category = category,
-					Images = images,
-					Code = product.Code,
-					Specifications = specifications
-				});
-			}
-		}
-		return Ok(list);
-	}
+    //[HttpPost("GetUserProducts")]
+    //public async Task<ActionResult<List<ProductViewModel>>> GetUserProducts(UserProductsSearchModel model)
+    //{
+    //	List<ProductViewModel> list = new List<ProductViewModel>();
+    //	if (model.CategoryIds.Any())
+    //	{
+    //		IQueryable<ProductModel> query = _context.Products.AsQueryable();
+    //		query = query.Where((ProductModel p) => model.CategoryIds.Contains(p.CategoryId) && p.IsActive);
+    //		if (model.SpecificationIds.Any())
+    //		{
+    //			query = query.Where((ProductModel p) => _context.ProductSpecifications.Any((ProductSpecificationModel x) => x.ProductId == p.Id && model.SpecificationIds.Contains(x.SpecificationId)));
+    //		}
+    //		if (!string.IsNullOrEmpty(model.Name))
+    //		{
+    //			query = query.Where((ProductModel p) => p.Name.Contains(model.Name));
+    //		}
+    //		if (model.StartPrice.HasValue)
+    //		{
+    //			query = GetProductsByCategoryAndPriceRange(query, model.CategoryIds.FirstOrDefault(), model.StartPrice.Value, model.EndPrice.Value, model.Sort);
+    //		}
+    //		if (model.Sort == "name asc")
+    //		{
+    //			query = query.OrderBy((ProductModel x) => x.Name);
+    //		}
+    //		if (model.Sort == "name desc")
+    //		{
+    //			query = query.OrderByDescending((ProductModel x) => x.Name);
+    //		}
+    //		foreach (ProductModel product in await query.Skip(model.Skip).Take(model.Take).ToListAsync())
+    //		{
+    //			List<ProductImageViewModel> images = await _productService.GetProductImages(product.Id);
+    //			CategoryModel category = await _context.Categories.FindAsync(product.CategoryId);
+    //			List<ProductSpecificationViewModel> specifications = await GetAllProductSpecifications(product.Id);
+    //			list.Add(new ProductViewModel
+    //			{
+    //				Id = product.Id,
+    //				Name = product.Name,
+    //				Description = product.Description,
+    //				DetailedDescription = product.DetailedDescription,
+    //				Price = product.Price,
+    //				CategoryId = product.CategoryId,
+    //				Category = category,
+    //				Images = images,
+    //				Code = product.Code,
+    //				Specifications = specifications
+    //			});
+    //		}
+    //	}
+    //	return Ok(list);
+    //}
+    [HttpPost("GetUserProducts")]
+    public async Task<ActionResult<List<ProductViewModel>>> GetUserProducts(UserProductsSearchModel model)
+    {
+        string cacheKey = $"products_search_{System.Text.Json.JsonSerializer.Serialize(model)}";
 
-	[HttpPost("GetUserProductsCount")]
+        if (_cache.TryGetValue(cacheKey, out List<ProductViewModel> cached))
+            return Ok(cached);
+
+        IQueryable<ProductModel> query = _context.Products.AsNoTracking();
+
+        if (model.CategoryIds.Any())
+            query = query.Where(p => model.CategoryIds.Contains(p.CategoryId) && p.IsActive);
+
+        if (model.SpecificationIds.Any())
+        {
+            query = query.Where(p =>
+                _context.ProductSpecifications.Any(x =>
+                    x.ProductId == p.Id &&
+                    model.SpecificationIds.Contains(x.SpecificationId)));
+        }
+
+        if (!string.IsNullOrEmpty(model.Name))
+            query = query.Where(p => p.Name.Contains(model.Name));
+
+        if (model.StartPrice.HasValue)
+        {
+            query = GetProductsByCategoryAndPriceRange(
+                query,
+                model.CategoryIds.FirstOrDefault(),
+                model.StartPrice.Value,
+                model.EndPrice.Value,
+                model.Sort
+            );
+        }
+
+        query = model.Sort switch
+        {
+            "name asc" => query.OrderBy(x => x.Name),
+            "name desc" => query.OrderByDescending(x => x.Name),
+            _ => query.OrderBy(x => x.Price)
+        };
+
+        var products = await query
+            .Skip(model.Skip)
+            .Take(model.Take)
+            .ToListAsync();
+
+        if (!products.Any())
+            return Ok(new List<ProductViewModel>());
+
+        var productIds = products.Select(p => p.Id).ToList();
+        var categoryIds = products.Select(p => p.CategoryId).Distinct().ToList();
+
+        // ✅ LOAD DATA IN BULK
+        var categories = await _context.Categories
+            .Where(c => categoryIds.Contains(c.Id))
+            .ToDictionaryAsync(c => c.Id);
+
+        var images = await _context.ProductImages
+            .AsNoTracking()
+            .Where(x => productIds.Contains(x.ProductId))
+            .ToListAsync();
+
+        var specifications = await _context.ProductSpecifications
+            .AsNoTracking()
+            .Where(x => productIds.Contains(x.ProductId))
+            .ToListAsync();
+
+        // ✅ MAP IMAGES (FIXED)
+        var imageLookup = images
+            .GroupBy(x => x.ProductId)
+            .ToDictionary(
+                g => g.Key,
+                g => g.Select(img => new ProductImageViewModel
+                {
+                    Id = img.Id,
+                    Name = img.Name,
+
+                    // 🔥 Convert file path → Base64
+                    Base64 = System.IO.File.Exists(img.Src)
+                        ? _imageService.GetBase64Prefix(img.Name) + Convert.ToBase64String(System.IO.File.ReadAllBytes(img.Src))
+                        : null,
+
+                    ZoomedBase64 = System.IO.File.Exists(img.ZoomedImageSrc)
+                        ? _imageService.GetBase64Prefix(img.Name) +  Convert.ToBase64String(System.IO.File.ReadAllBytes(img.ZoomedImageSrc))
+                        : null,
+
+                    SpecificationId = img.SpecificationId
+                }).ToList()
+            );
+
+        // ✅ BUILD RESPONSE (FIXED SPECIFICATIONS)
+        var result = products.Select(p => new ProductViewModel
+        {
+            Id = p.Id,
+            Name = p.Name,
+            Description = p.Description,
+            DetailedDescription = p.DetailedDescription,
+            Price = p.Price,
+            CategoryId = p.CategoryId,
+            Category = categories.ContainsKey(p.CategoryId)
+                ? categories[p.CategoryId]
+                : null,
+            Images = imageLookup.ContainsKey(p.Id)
+                ? imageLookup[p.Id]
+                : new List<ProductImageViewModel>(),
+            Code = p.Code,
+
+            // 🔥 FIXED: match your ViewModel fields
+            Specifications = specifications
+                .Where(s => s.ProductId == p.Id)
+                .Select(s => new ProductSpecificationViewModel
+                {
+                    Id = s.Id,
+                    ProductId = s.ProductId
+                    // ❗ removed SpecificationId because your VM doesn't have it
+                }).ToList()
+        }).ToList();
+
+        // ✅ CACHE
+        var cacheOptions = new MemoryCacheEntryOptions()
+            .SetAbsoluteExpiration(TimeSpan.FromMinutes(5))
+            .SetSlidingExpiration(TimeSpan.FromMinutes(2));
+
+        _cache.Set(cacheKey, result, cacheOptions);
+
+        return Ok(result);
+    }
+    [HttpPost("GetUserProductsCount")]
 	public async Task<ActionResult<int>> GetUserProductsCount(UserProductsSearchModel model)
 	{
 		int count = 0;
@@ -189,21 +317,51 @@ public class ProductsController : ControllerBase
     [HttpGet("GetUserProductsByCategory")]
     public async Task<ActionResult<List<ProductViewModel>>> GetUserProductsByCategory(Guid id)
     {
-        var products = await _context.Products
-            .AsNoTracking()
-            .Where(x => x.CategoryId == id && x.IsActive)
-            .OrderBy(x => x.Price)
-            .Select(x => new ProductViewModel
-            {
-                Id = x.Id,
-                Name = x.Name,
-                Price = x.Price,
-                Code = x.Code
-            })
-            .Take(10)
-            .ToListAsync();
+        string cacheKey = $"products_category_{id}";
 
-        return Ok(products);
+        // ✅ 1. Try cache
+        if (!_cache.TryGetValue(cacheKey, out List<ProductViewModel> cachedProducts))
+        {
+            // ✅ 2. Get products (light query)
+            var products = await _context.Products
+                .AsNoTracking()
+                .Where(x => x.CategoryId == id && x.IsActive)
+                .OrderBy(x => x.Price)
+                .Take(10)
+                .ToListAsync();
+
+            if (!products.Any())
+                return Ok(new List<ProductViewModel>());
+
+            var result = new List<ProductViewModel>();
+
+            // ✅ 3. Attach images (with INTERNAL caching in service)
+            foreach (var product in products)
+            {
+                var images = await _productService.GetProductImages(product.Id);
+
+                result.Add(new ProductViewModel
+                {
+                    Id = product.Id,
+                    Name = product.Name,
+                    Price = product.Price,
+                    Code = product.Code,
+                    Images = images
+                });
+            }
+
+            // ✅ 4. Cache result
+            var cacheOptions = new MemoryCacheEntryOptions()
+                .SetAbsoluteExpiration(TimeSpan.FromMinutes(5))
+                .SetSlidingExpiration(TimeSpan.FromMinutes(2));
+
+            _cache.Set(cacheKey, result, cacheOptions);
+
+            return Ok(result);
+        }
+
+        // ✅ 5. Return cached
+        return Ok(cachedProducts);
     }
 
     private async Task<List<ProductSpecificationViewModel>> GetAllProductSpecifications(Guid id)
@@ -375,6 +533,8 @@ public class ProductsController : ControllerBase
 		_context.Products.Add(newProduct);
 		await _context.SaveChangesAsync();
         _cache.Remove($"product_{product.Code}");
+        _cache.Remove($"products_category_{product.CategoryId}");
+        _cache.Remove($"product_images_{product.Id}");
         return Ok(newProduct);
 	}
 
@@ -490,6 +650,8 @@ public class ProductsController : ControllerBase
 			existingProduct.IsActive = product.IsActive;
 			await _context.SaveChangesAsync();
             _cache.Remove($"product_{product.Code}");
+            _cache.Remove($"products_category_{product.CategoryId}");
+            _cache.Remove($"product_images_{product.Id}");
             return Ok();
 		}
 		catch (Exception)
@@ -510,6 +672,8 @@ public class ProductsController : ControllerBase
 		_context.Products.Remove(product);
 		await _context.SaveChangesAsync();
         _cache.Remove($"product_{product.Code}");
+        _cache.Remove($"products_category_{product.CategoryId}");
+        _cache.Remove($"product_images_{product.Id}");
         return NoContent();
 	}
 

@@ -61,5 +61,26 @@ namespace JeweleryAppBackend.Services
                 };
             }
         }
+        public string GetBase64Prefix(string name)
+        {
+            string mimeType = "image/png";
+            if (name.EndsWith(".jpg") || name.EndsWith(".jpeg"))
+            {
+                mimeType = "image/jpeg";
+            }
+            if (name.EndsWith(".webp"))
+            {
+                mimeType = "image/webp";
+            }
+            else if (name.EndsWith(".gif"))
+            {
+                mimeType = "image/gif";
+            }
+            else if (name.EndsWith(".svg"))
+            {
+                mimeType = "image/svg+xml";
+            }
+            return "data:" + mimeType + ";base64,";
+        }
     }
 }
