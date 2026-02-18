@@ -35,7 +35,8 @@ internal class Program
 		});
 		try
 		{
-			builder.Services.AddControllers();
+            builder.Services.AddMemoryCache();
+            builder.Services.AddControllers();
 			builder.Services.AddTransient<UserService>();
 			builder.Services.AddTransient<EmailService>();
 			builder.Services.AddTransient<ProductService>();
@@ -87,6 +88,7 @@ internal class Program
 			app.UseAuthentication();
 			app.UseAuthorization();
 			app.MapControllers(); 
+			app.UseStaticFiles();
             app.Run();
 		}
 		catch (Exception exception)

@@ -31,14 +31,7 @@ public class CategoriesController : ControllerBase
 
     [HttpGet("GetAllNavCategories")]
     public async Task<ActionResult<List<NavCategoryDto>>> GetAllNavCategories()
-    {
-        // Step 1: Get category IDs used by active products
-        //var categoryIds = await _context.Products
-        //    .Where(x => x.IsActive)
-        //    .Select(x => x.CategoryId)
-        //    .Distinct()
-        //    .ToListAsync();
-
+    { 
         // Step 2: Get those categories
         var categories = await _context.Categories
             //.Where(x => categoryIds.Contains(x.Id))

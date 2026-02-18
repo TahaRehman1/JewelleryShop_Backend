@@ -183,25 +183,27 @@ public class ProductsController : ControllerBase
 		return result.Select(x => x.Product);
 	}
 
-	[HttpGet("GetUserProductsByCategory")]
-	public async Task<ActionResult<List<ProductViewModel>>> GetUserProductsByCategory(Guid id)
-	{
-		List<ProductViewModel> list = new List<ProductViewModel>();
-		List<ProductModel> products = await (from x in _context.Products
-			where x.CategoryId == id && x.IsActive
-			orderby x.Price
-			select x).Skip(0).Take(10).ToListAsync();
-		if (products.Any())
-		{
-			foreach (ProductModel product in products)
-			{
-				list.Add(await GetProductModel(product));
-			}
-		}
-		return Ok(list);
-	}
+    [HttpGet("GetUserProductsByCategory")]
+    public async Task<ActionResult<List<ProductViewModel>>> GetUserProductsByCategory(Guid id)
+    {
+        var products = await _context.Products
+            .AsNoTracking()
+            .Where(x => x.CategoryId == id && x.IsActive)
+            .OrderBy(x => x.Price)
+            .Select(x => new ProductViewModel
+            {
+                Id = x.Id,
+                Name = x.Name,
+                Price = x.Price,
+                Code = x.Code
+            })
+            .Take(10)
+            .ToListAsync();
 
-	private async Task<List<ProductSpecificationViewModel>> GetAllProductSpecifications(Guid id)
+        return Ok(products);
+    }
+
+    private async Task<List<ProductSpecificationViewModel>> GetAllProductSpecifications(Guid id)
 	{
 		List<ProductSpecificationViewModel> list = new List<ProductSpecificationViewModel>();
 		List<ProductSpecificationModel> productSpecifications = await _context.ProductSpecifications.Where((ProductSpecificationModel x) => x.ProductId == id).ToListAsync();
