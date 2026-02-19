@@ -8,6 +8,7 @@ using Stripe.Climate;
 using System;
 using System.Drawing.Printing;
 using System.IO;
+using System.Linq;
 using System.Reflection.Metadata;
 using System.Text;
 using System.Threading.Tasks;
@@ -82,10 +83,33 @@ namespace JeweleryAppBackend.Services
             html = html.Replace("{{CustomerPhone}}", order.CustomerPhone);
             html = html.Replace("{{Total}}", order.Price.ToString());
             html = html.Replace("{{Address}}", order.ShippingAddress.ToString());
-            html = html.Replace("{{ShippingAmount}}", order.ShippingAmount.ToString());
-            html = html.Replace("{{Price}}", (order.Price - order.ShippingAmount).ToString());
-            html = html.Replace("{{TotalPrice}}",(order.Price).ToString());
+            html = html.Replace("{{ShippingAmount}}", order.ShippingAmount.ToString()); 
+            if (order.Discount != null)
+            {
+                var percentage = order.Discount.Percentage;
 
+                // ✅ Calculate subtotal from order products
+                var subtotal = order.OrderProducts.Sum(x => x.Price * x.Quantity);
+
+                // ✅ Calculate discount from subtotal
+                var discountAmount = (subtotal * percentage) / 100m;
+
+                html = html.Replace("{{DiscountLine}}",
+                    $"<tr><td>Discount ({order.Discount.Code} - {percentage}%)</td><td>{discountAmount:0.00}</td></tr>");
+
+                // ✅ Replace subtotal
+                html = html.Replace("{{Price}}", subtotal.ToString("0.00"));
+
+                // ✅ Final total
+                var grandTotal = subtotal - discountAmount + order.ShippingAmount;
+                html = html.Replace("{{TotalPrice}}", grandTotal.ToString("0.00"));
+            }
+            else
+            {
+                html = html.Replace("{{Price}}", (order.Price - order.ShippingAmount).ToString());
+                html = html.Replace("{{TotalPrice}}", (order.Price).ToString());
+                html = html.Replace("{{DiscountLine}}", "");
+            }
             // Generate items rows
             string itemsHtml = "";  
             foreach (var item in order.OrderProducts)

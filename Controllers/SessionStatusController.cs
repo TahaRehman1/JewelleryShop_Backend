@@ -32,7 +32,7 @@ public class SessionStatusController : Controller
 		_logger = logger;
 		_context = context;
 	}
-
+    [HttpGet]
     public async Task<IActionResult> SessionStatus([FromQuery] string sessionId, [FromQuery] Guid orderId)
     {
         SessionService sessionService = new SessionService();

@@ -129,3 +129,5 @@ _ReSharper*/
 *.DotSettings.user
 
 Images/ProductImages/
+.playwright/
+playwright/

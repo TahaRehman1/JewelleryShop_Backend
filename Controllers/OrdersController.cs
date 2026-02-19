@@ -35,21 +35,54 @@ public class OrdersController : ControllerBase
 		_emailSettings = emailSettings.Value;
     }
 
-	[HttpGet("GetAll")]
-	[Authorize(Roles = "Admin")]
-	public async Task<ActionResult<List<OrderModel>>> GetAll(int skip, int take)
-	{
-		return await _context.Orders.Skip(skip).Take(take).ToListAsync();
-	}
+    [HttpGet("GetAll")]
+    [Authorize(Roles = "Admin")]
+    public async Task<ActionResult> GetAll(int skip, int take)
+    {
+        var query =
+            from o in _context.Orders.AsNoTracking()
 
-	[HttpGet("GetCount")]
-	[Authorize(Roles = "Admin")]
-	public async Task<ActionResult<int>> GetCount()
-	{
-		return (await _context.Orders.ToListAsync()).Count;
-	}
+            // Discount LEFT JOIN
+            join d in _context.Discounts.AsNoTracking()
+                on o.DiscountId equals d.Id into discountGroup
+            from d in discountGroup.DefaultIfEmpty()
 
-	[HttpGet("GetById")]
+            select new OrderViewModel
+            {
+                Id = o.Id,
+                Price = o.Price,
+                DateOfCreation = o.DateOfCreation,
+
+                // ✅ Direct from Orders table
+                CustomerEmail = o.CustomerEmail,
+                CustomerName = o.CustomerName,
+                CustomerPhone = o.CustomerPhone,
+                ShippingAddress = o.ShippingAddress,
+                OrderStatus = o.OrderStatus,
+                PaymentStatus = o.PaymentStatus,
+
+                // Discount
+                DiscountId = o.DiscountId,
+                Discount = d == null ? null : new DiscountModel
+                {
+                    Id = d.Id,
+                    Code = d.Code,
+                    Percentage = d.Percentage
+                }
+            };
+
+        var total = await _context.Orders.CountAsync();
+
+        var data = await query
+            .OrderByDescending(x => x.DateOfCreation)
+            .Skip(skip)
+            .Take(take)
+            .ToListAsync();
+
+        return Ok(new { data, total });
+    }
+
+    [HttpGet("GetById")]
 	[Authorize(Roles = "Admin")]
 	public async Task<ActionResult<OrderViewModel>> GetById(Guid id)
 	{
@@ -180,24 +213,38 @@ public class OrdersController : ControllerBase
         return totalPrice;
     }
 
-    private async Task<decimal> CalculateTotalPrice(List<AddOrderProductModel> orderProducts, decimal shippingAmount, string discountId, List<ProductSpecificationModel> productSpecifications)
-	{
-		decimal totalPrice = GetTotalItemPrice(orderProducts, productSpecifications);
-		totalPrice = (((totalPrice >= 150m) & (shippingAmount == (decimal)_shippingFeeSettings.Standard)) ? (totalPrice + 0m) : (totalPrice + shippingAmount));
-		if (!string.IsNullOrEmpty(discountId))
-		{
-			DiscountModel discount = await _context.Discounts.FindAsync(Guid.Parse(discountId));
-			if (discount != null)
-			{
-				decimal discountDecimal = discount.Percentage / 100m;
-				decimal discountAmount = totalPrice * discountDecimal;
-				totalPrice -= discountAmount;
-			}
-		}
-		return totalPrice;
-	}
+    private async Task<decimal> CalculateTotalPrice(
+     List<AddOrderProductModel> orderProducts,
+     decimal shippingAmount,
+     string discountId,
+     List<ProductSpecificationModel> productSpecifications)
+    {
+        // ✅ Step 1: Get items total (subtotal)
+        decimal subtotal = GetTotalItemPrice(orderProducts, productSpecifications);
 
-	[HttpPut]
+        // ✅ Step 2: Apply discount on subtotal ONLY
+        if (!string.IsNullOrEmpty(discountId))
+        {
+            var discount = await _context.Discounts.FindAsync(Guid.Parse(discountId));
+            if (discount != null)
+            {
+                decimal discountAmount = (subtotal * discount.Percentage) / 100m;
+                subtotal -= discountAmount;
+            }
+        }
+
+        // ✅ Step 3: Add shipping AFTER discount
+        bool isFreeShipping = subtotal >= 150m
+            && shippingAmount == (decimal)_shippingFeeSettings.Standard;
+
+        decimal totalPrice = isFreeShipping
+            ? subtotal
+            : subtotal + shippingAmount;
+
+        return totalPrice;
+    }
+
+    [HttpPut]
 	public async Task<IActionResult> PutOrder(Guid id, OrderModel order)
 	{
 		if (id != order.Id)
