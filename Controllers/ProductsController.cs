@@ -85,58 +85,7 @@ public class ProductsController : ControllerBase
 	public async Task<ActionResult<int>> GetCount()
 	{
 		return await _context.Products.CountAsync();
-	}
-
-    //[HttpPost("GetUserProducts")]
-    //public async Task<ActionResult<List<ProductViewModel>>> GetUserProducts(UserProductsSearchModel model)
-    //{
-    //	List<ProductViewModel> list = new List<ProductViewModel>();
-    //	if (model.CategoryIds.Any())
-    //	{
-    //		IQueryable<ProductModel> query = _context.Products.AsQueryable();
-    //		query = query.Where((ProductModel p) => model.CategoryIds.Contains(p.CategoryId) && p.IsActive);
-    //		if (model.SpecificationIds.Any())
-    //		{
-    //			query = query.Where((ProductModel p) => _context.ProductSpecifications.Any((ProductSpecificationModel x) => x.ProductId == p.Id && model.SpecificationIds.Contains(x.SpecificationId)));
-    //		}
-    //		if (!string.IsNullOrEmpty(model.Name))
-    //		{
-    //			query = query.Where((ProductModel p) => p.Name.Contains(model.Name));
-    //		}
-    //		if (model.StartPrice.HasValue)
-    //		{
-    //			query = GetProductsByCategoryAndPriceRange(query, model.CategoryIds.FirstOrDefault(), model.StartPrice.Value, model.EndPrice.Value, model.Sort);
-    //		}
-    //		if (model.Sort == "name asc")
-    //		{
-    //			query = query.OrderBy((ProductModel x) => x.Name);
-    //		}
-    //		if (model.Sort == "name desc")
-    //		{
-    //			query = query.OrderByDescending((ProductModel x) => x.Name);
-    //		}
-    //		foreach (ProductModel product in await query.Skip(model.Skip).Take(model.Take).ToListAsync())
-    //		{
-    //			List<ProductImageViewModel> images = await _productService.GetProductImages(product.Id);
-    //			CategoryModel category = await _context.Categories.FindAsync(product.CategoryId);
-    //			List<ProductSpecificationViewModel> specifications = await GetAllProductSpecifications(product.Id);
-    //			list.Add(new ProductViewModel
-    //			{
-    //				Id = product.Id,
-    //				Name = product.Name,
-    //				Description = product.Description,
-    //				DetailedDescription = product.DetailedDescription,
-    //				Price = product.Price,
-    //				CategoryId = product.CategoryId,
-    //				Category = category,
-    //				Images = images,
-    //				Code = product.Code,
-    //				Specifications = specifications
-    //			});
-    //		}
-    //	}
-    //	return Ok(list);
-    //}
+	} 
     [HttpPost("GetUserProducts")]  
     public async Task<ActionResult<List<ProductViewModel>>> GetUserProducts(UserProductsSearchModel model)
     {

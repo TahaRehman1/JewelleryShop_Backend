@@ -27,8 +27,9 @@ public class OrderModel
 	public decimal Price { get; set; }
 
 	public Guid? DiscountId { get; set; }
+    public bool DiscountApplied { get; set; }
 
-	public OrderStatus OrderStatus { get; set; }
+    public OrderStatus OrderStatus { get; set; }
 
 	public string OrderNumber { get; set; }
 
