@@ -1,0 +1,8 @@
+﻿namespace JeweleryAppBackend.Models
+{
+    public class ProductHighlightSearchModel
+    { 
+        public int Skip { get; set; }
+        public int Take { get; set; }
+    }
+}

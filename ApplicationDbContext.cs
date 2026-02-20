@@ -27,6 +27,7 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
     public DbSet<InvoiceModel> Invoices { get; set; }
 
     public DbSet<ProductSpecificationModel> ProductSpecifications { get; set; }
+    public DbSet<ProductHighlight> ProductHighlights { get; set; }
     public DbSet<HeroSection> HeroSections { get; set; }
     public ApplicationDbContext(DbContextOptions<ApplicationDbContext> options)
 		: base((DbContextOptions)options)
