@@ -80,7 +80,7 @@ public class BannersController : ControllerBase
 		return Ok(banner);
 	}
 
-	[HttpPut("Delete")]
+	[HttpDelete("Delete")]
 	[Authorize(Roles = "Admin")]
 	public async Task<ActionResult> Delete(Guid id)
 	{

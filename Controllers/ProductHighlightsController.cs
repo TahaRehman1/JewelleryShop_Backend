@@ -39,7 +39,7 @@ public class ProductHighlightsController : ControllerBase
 
         _context.ProductHighlights.Add(highlight);
         await _context.SaveChangesAsync();
-
+        _cache.Remove($"products_highlight_{model.Type}"); 
         return Ok(model);
     }
 
@@ -54,8 +54,8 @@ public class ProductHighlightsController : ControllerBase
 
         existing.ProductId = model.ProductId;
         existing.Type = model.Type;
-
         await _context.SaveChangesAsync();
+        _cache.Remove($"products_highlight_{existing.Type}");
         return Ok(existing);
     }
 
@@ -68,9 +68,10 @@ public class ProductHighlightsController : ControllerBase
         if (entity == null)
             return NotFound();
 
+        var type = entity.Type;
         _context.ProductHighlights.Remove(entity);
         await _context.SaveChangesAsync();
-
+        _cache.Remove($"products_highlight_{type}");
         return Ok();
     }
 
